@@ -1,13 +1,13 @@
 name: Stream V21 APK
 
-"on":
+on:
   push:
     branches:
       - main
   workflow_dispatch:
 
 concurrency:
-  group: stream-v21-build
+  group: stream-v21
   cancel-in-progress: true
 
 jobs:
@@ -16,68 +16,47 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # =========================================
-      # 1. Checkout
-      # =========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # =========================================
-      # 2. Java 17
-      # =========================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-      # =========================================
-      # 3. Flutter
-      # =========================================
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.47.2"
+          flutter-version: '3.47.2'
           channel: stable
           cache: true
 
-      # =========================================
-      # 4. Android SDK
-      # =========================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # =========================================
-      # 5. Android licenses
-      # =========================================
       - name: Accept Android licenses
+        shell: bash
         run: |
           yes | sdkmanager --licenses > /dev/null || true
 
-      # =========================================
-      # 6. Create local.properties
-      # =========================================
-      - name: Create local.properties
+      - name: Create Android local.properties
+        shell: bash
         run: |
-          echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
-          echo "sdk.dir=$ANDROID_HOME" >> android/local.properties
+          printf '%s\n' \
+            "flutter.sdk=$FLUTTER_ROOT" \
+            "sdk.dir=$ANDROID_HOME" \
+            > android/local.properties
 
-          echo "android/local.properties:"
-          cat android/local.properties
+          echo "android/local.properties created"
 
-      # =========================================
-      # 7. Setup Gradle
-      # =========================================
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.5.0"
+          gradle-version: '9.5.0'
 
-      # =========================================
-      # 8. Disable Gradle file watching
-      # =========================================
       - name: Configure Gradle
+        shell: bash
         run: |
           mkdir -p "$HOME/.gradle"
 
@@ -87,27 +66,24 @@ jobs:
           org.gradle.jvmargs=-Xmx4G -Dfile.encoding=UTF-8
           EOF
 
-      # =========================================
-      # 9. Verify project
-      # =========================================
       - name: Verify project
+        shell: bash
         run: |
+          set -e
+
           echo "========================================"
-          echo "STREAM V21 PROJECT"
+          echo "STREAM V21"
           echo "========================================"
 
+          echo "Working directory:"
           pwd
 
           echo ""
-          echo "Root:"
+          echo "Root files:"
           ls -la
 
           echo ""
-          echo "Android:"
-          ls -la android
-
-          echo ""
-          echo "Required files:"
+          echo "Checking required files..."
 
           test -f pubspec.yaml
           test -d lib
@@ -116,21 +92,16 @@ jobs:
           test -f android/app/build.gradle.kts
           test -f android/gradle/wrapper/gradle-wrapper.properties
 
-          echo ""
-          echo "Project structure OK."
+          echo "OK: pubspec.yaml"
+          echo "OK: lib/"
+          echo "OK: android/"
+          echo "OK: settings.gradle.kts"
+          echo "OK: app/build.gradle.kts"
+          echo "OK: gradle-wrapper.properties"
 
-      # =========================================
-      # 10. Show Android configuration
-      # =========================================
       - name: Show Android configuration
+        shell: bash
         run: |
-          echo "========================================"
-          echo "SETTINGS GRADLE"
-          echo "========================================"
-
-          cat android/settings.gradle.kts
-
-          echo ""
           echo "========================================"
           echo "GRADLE WRAPPER"
           echo "========================================"
@@ -139,59 +110,65 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "GRADLE VERSION"
+          echo "SETTINGS"
+          echo "========================================"
+
+          cat android/settings.gradle.kts
+
+          echo ""
+          echo "========================================"
+          echo "GRADLE"
           echo "========================================"
 
           gradle --version
 
-      # =========================================
-      # 11. Flutter doctor
-      # =========================================
       - name: Flutter Doctor
+        shell: bash
         run: |
           flutter --version
           dart --version
           flutter doctor -v
 
-      # =========================================
-      # 12. Clean
-      # =========================================
       - name: Flutter Clean
+        shell: bash
         run: |
           flutter clean
 
-      # =========================================
-      # 13. Dependencies
-      # =========================================
       - name: Flutter Pub Get
+        shell: bash
         run: |
           flutter pub get
 
-      # =========================================
-      # 14. Flutter Android artifacts
-      # =========================================
       - name: Precache Flutter Android
+        shell: bash
         run: |
           flutter precache --android
 
-      # =========================================
-      # 15. Patch rtmp_streaming
-      # =========================================
-      - name: Patch rtmp_streaming 2.0.1
+      - name: Verify rtmp_streaming
         shell: bash
         run: |
           PLUGIN="$HOME/.pub-cache/hosted/pub.dev/rtmp_streaming-2.0.1/android/build.gradle"
 
           if [ ! -f "$PLUGIN" ]; then
-            echo "ERROR: rtmp_streaming build.gradle not found."
+            echo "ERROR: rtmp_streaming 2.0.1 was not found"
             exit 1
           fi
 
-          echo "========================================"
-          echo "BEFORE RTMP PATCH"
-          echo "========================================"
+          echo "rtmp_streaming found:"
+          echo "$PLUGIN"
 
-          nl -ba "$PLUGIN" | sed -n '1,120p'
+          echo ""
+          echo "Plugin build.gradle:"
+          cat "$PLUGIN"
+
+      - name: Patch rtmp_streaming
+        shell: bash
+        run: |
+          set -e
+
+          PLUGIN="$HOME/.pub-cache/hosted/pub.dev/rtmp_streaming-2.0.1/android/build.gradle"
+
+          test -f "$PLUGIN"
 
           python3 - "$PLUGIN" <<'PY'
           import re
@@ -201,66 +178,65 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text()
 
-          # Replace any kotlinOptions block.
-          text = re.sub(
-              r'(?ms)^[ \t]*kotlinOptions[ \t]*\{.*?^[ \t]*\}',
-              '''    kotlin {
+          # Replace legacy kotlinOptions block when present.
+          pattern = re.compile(
+              r'(?ms)^[ \t]*kotlinOptions[ \t]*\{.*?^[ \t]*\}'
+          )
+
+          replacement = """    kotlin {
               compilerOptions {
                   jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
               }
-          }''',
+          }"""
+
+          text, count = pattern.subn(
+              replacement,
               text,
               count=1
           )
 
-          # Make sure JitPack is available.
+          if count == 0:
+              print("No legacy kotlinOptions block found; leaving plugin unchanged.")
+          else:
+              print("Legacy kotlinOptions block replaced.")
+
+          # Ensure JitPack is available for RootEncoder.
           if "https://jitpack.io" not in text:
               text += """
 
-repositories {
-    google()
-    mavenCentral()
-    maven {
-        url 'https://jitpack.io'
-    }
-}
-"""
+          repositories {
+              google()
+              mavenCentral()
+              maven {
+                  url 'https://jitpack.io'
+              }
+          }
+          """
+              print("JitPack repository added.")
+          else:
+              print("JitPack repository already present.")
 
           path.write_text(text)
-          print("rtmp_streaming patch completed.")
           PY
 
           echo ""
-          echo "========================================"
-          echo "AFTER RTMP PATCH"
-          echo "========================================"
+          echo "Patched plugin:"
+          cat "$PLUGIN"
 
-          nl -ba "$PLUGIN" | sed -n '1,130p'
-
-      # =========================================
-      # 16. Analyze
-      # =========================================
       - name: Flutter Analyze
+        shell: bash
         run: |
           flutter analyze
 
-      # =========================================
-      # 17. Tests
-      # =========================================
       - name: Flutter Test
+        shell: bash
         run: |
           flutter test
 
-      # =========================================
-      # 18. Build APK
-      # =========================================
       - name: Build Stream V21 APK
         shell: bash
         env:
-          GRADLE_OPTS: >-
-            -Dorg.gradle.vfs.watch=false
-            -Dorg.gradle.daemon=false
-            -Dorg.gradle.jvmargs=-Xmx4G
+          GRADLE_OPTS: '-Dorg.gradle.vfs.watch=false -Dorg.gradle.daemon=false'
         run: |
           set -e
 
@@ -277,25 +253,27 @@ repositories {
 
           find "$GITHUB_WORKSPACE" \
             -type f \
-            -name "*.apk" \
+            -name '*.apk' \
             -print || true
 
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
 
-          APK=$(find "$GITHUB_WORKSPACE/build" \
+          APK="$(find "$GITHUB_WORKSPACE/build" \
             -type f \
-            -name "*.apk" \
-            | head -n 1 || true)
+            -name '*.apk' \
+            | head -n 1 || true)"
 
           if [ -z "$APK" ]; then
             echo ""
-            echo "ERROR: APK was not generated."
+            echo "ERROR: No APK was produced."
+
             echo ""
-            echo "Build directory contents:"
+            echo "Build directory:"
             find "$GITHUB_WORKSPACE/build" \
               -maxdepth 10 \
               -type f \
               -print 2>/dev/null || true
+
             exit 1
           fi
 
@@ -308,11 +286,9 @@ repositories {
 
           echo ""
           echo "FINAL APK:"
-          ls -lh "$GITHUB_WORKSPACE/artifacts/Stream-V21-release.apk"
+          ls -lh \
+            "$GITHUB_WORKSPACE/artifacts/Stream-V21-release.apk"
 
-      # =========================================
-      # 19. Verify APK
-      # =========================================
       - name: Verify APK
         shell: bash
         run: |
@@ -322,13 +298,13 @@ repositories {
 
           test -f "$APK"
 
-          SIZE=$(stat -c%s "$APK")
+          SIZE="$(stat -c%s "$APK")"
 
           echo "========================================"
           echo "APK VERIFIED"
           echo "========================================"
 
-          echo "File:"
+          echo "Path:"
           echo "$APK"
 
           echo ""
@@ -340,9 +316,6 @@ repositories {
             exit 1
           fi
 
-      # =========================================
-      # 20. Upload APK
-      # =========================================
       - name: Upload Stream V21 APK
         uses: actions/upload-artifact@v4
         with:
